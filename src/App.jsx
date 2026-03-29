@@ -47,6 +47,15 @@ function normalizeStoredConcept(raw) {
   return LEGACY_CONCEPT_TO_CURRENT[raw] ?? null
 }
 
+/** Avoid reloading a lone email in Student notes (browser autofill or mistaken save). */
+function sanitizeStoredStudentNotes(value) {
+  if (typeof value !== 'string') return ''
+  const t = value.trim()
+  if (t === '') return ''
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return ''
+  return value
+}
+
 const STORAGE_KEY = 'zl_script_builder_v1'
 
 /** Strict output skeleton the model must follow */
@@ -425,7 +434,7 @@ export default function App() {
       const normalized = normalizeStoredConcept(parsed.concept)
       if (normalized) setConcept(normalized)
       if (typeof parsed.materials === 'string') setMaterials(parsed.materials)
-      if (typeof parsed.notes === 'string') setNotes(parsed.notes)
+      if (typeof parsed.notes === 'string') setNotes(sanitizeStoredStudentNotes(parsed.notes))
       if (typeof parsed.expertTeachingConstraints === 'string') {
         setExpertTeachingConstraints(parsed.expertTeachingConstraints)
       } else if (typeof parsed.scriptToFix === 'string') {
@@ -592,12 +601,16 @@ export default function App() {
           </div>
 
           <div>
-            <label htmlFor="notes" className="mb-2 block text-base font-medium text-slate-800">
+            <label htmlFor="student-notes" className="mb-2 block text-base font-medium text-slate-800">
               Student notes
             </label>
             <input
-              id="notes"
+              id="student-notes"
+              name="ausplanStudentNotes"
               type="text"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-lg text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
