@@ -47,13 +47,17 @@ function normalizeStoredConcept(raw) {
   return LEGACY_CONCEPT_TO_CURRENT[raw] ?? null
 }
 
-/** Avoid reloading a lone email in Student notes (browser autofill or mistaken save). */
+/** Avoid a lone email in Student notes (browser autofill, password managers, mistaken save). */
+function isLoneEmailString(value) {
+  if (typeof value !== 'string') return false
+  const t = value.replace(/\u200B/g, '').trim()
+  if (t === '') return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)
+}
+
 function sanitizeStoredStudentNotes(value) {
   if (typeof value !== 'string') return ''
-  const t = value.trim()
-  if (t === '') return ''
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return ''
-  return value
+  return isLoneEmailString(value) ? '' : value
 }
 
 const STORAGE_KEY = 'zl_script_builder_v1'
@@ -422,6 +426,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  /** Stops Chrome/Safari from injecting email into this field before first focus. */
+  const [studentNotesReadOnly, setStudentNotesReadOnly] = useState(true)
 
   const envKey = import.meta.env.VITE_OPENAI_API_KEY || ''
   const effectiveKey = apiKey.trim() || envKey
@@ -434,7 +440,21 @@ export default function App() {
       const normalized = normalizeStoredConcept(parsed.concept)
       if (normalized) setConcept(normalized)
       if (typeof parsed.materials === 'string') setMaterials(parsed.materials)
-      if (typeof parsed.notes === 'string') setNotes(sanitizeStoredStudentNotes(parsed.notes))
+      if (typeof parsed.notes === 'string') {
+        const cleaned = sanitizeStoredStudentNotes(parsed.notes)
+        setNotes(cleaned)
+        if (cleaned !== parsed.notes) {
+          parsed.notes = cleaned
+          try {
+            localStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify({ ...parsed, savedAt: new Date().toISOString() }),
+            )
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       if (typeof parsed.expertTeachingConstraints === 'string') {
         setExpertTeachingConstraints(parsed.expertTeachingConstraints)
       } else if (typeof parsed.scriptToFix === 'string') {
@@ -445,6 +465,15 @@ export default function App() {
     } catch {
       /* ignore */
     }
+  }, [])
+
+  /** Browsers often autofill after paint — strip a lone email for a short window. */
+  useEffect(() => {
+    const clearIfLoneEmail = () => {
+      setNotes((prev) => (isLoneEmailString(prev) ? '' : prev))
+    }
+    const timeouts = [0, 50, 100, 250, 500, 1000, 2000].map((ms) => setTimeout(clearIfLoneEmail, ms))
+    return () => timeouts.forEach(clearTimeout)
   }, [])
 
   const persist = useCallback((next) => {
@@ -566,7 +595,18 @@ export default function App() {
       </header>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-8">
-        <div className="no-print space-y-6">
+        <form
+          className="no-print space-y-6"
+          autoComplete="off"
+          name="ausplan-builder"
+          onSubmit={(e) => e.preventDefault()}
+        >
+          {/* Honeypot fields: many browsers/extensions fill "email" / "password" into the first matching inputs. */}
+          <div className="sr-only" aria-hidden="true">
+            <input type="text" tabIndex={-1} name="decoy-email" autoComplete="nope" />
+            <input type="password" tabIndex={-1} name="decoy-password" autoComplete="new-password" />
+          </div>
+
           <div>
             <label htmlFor="concept" className="mb-2 block text-base font-medium text-slate-800">
               Concept
@@ -593,7 +633,9 @@ export default function App() {
             </label>
             <input
               id="materials"
+              name="ausplan-materials"
               type="text"
+              autoComplete="off"
               value={materials}
               onChange={(e) => setMaterials(e.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-lg text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
@@ -608,11 +650,19 @@ export default function App() {
               id="student-notes"
               name="ausplanStudentNotes"
               type="text"
+              inputMode="text"
               autoComplete="off"
               autoCorrect="off"
               spellCheck={false}
+              readOnly={studentNotesReadOnly}
+              data-lpignore="true"
+              data-1p-ignore="true"
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onFocus={() => setStudentNotesReadOnly(false)}
+              onChange={(e) => {
+                const v = e.target.value
+                setNotes(isLoneEmailString(v) ? '' : v)
+              }}
               className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-lg text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
             />
           </div>
@@ -655,8 +705,9 @@ export default function App() {
             </label>
             <input
               id="apikey"
+              name="ausplan-openai-key"
               type="password"
-              autoComplete="off"
+              autoComplete="new-password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-lg text-slate-900 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
@@ -694,7 +745,7 @@ export default function App() {
               {error}
             </div>
           )}
-        </div>
+        </form>
 
         <section
           className={`mt-10 print-break ${output ? 'rounded-xl border border-slate-200 bg-white p-6 shadow-sm print:border-0 print:shadow-none' : 'no-print'}`}
